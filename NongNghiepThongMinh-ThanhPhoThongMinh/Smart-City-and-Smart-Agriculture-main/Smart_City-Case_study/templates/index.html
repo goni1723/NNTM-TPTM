@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hệ thống giám sát giao thông</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 20px;
+        }
+
+        h1 {
+            color: #000000; /* Đỏ */
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .container {
+            display: flex;
+            gap: 20px;
+            max-width: 1800px;
+            margin: 0 auto;
+        }
+
+        .left-column {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .right-column {
+            width: 400px;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(216, 0, 0, 0.2);
+            height: fit-content;
+        }
+
+        img {
+            max-width: 100%;
+            height: auto;
+            border: 2px solid ;
+        }
+
+        .info {
+            margin-top: 20px;
+            font-size: 18px;
+            text-align: center;
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+        }
+
+        #videoContainer {
+            position: relative;
+            display: inline-block;
+        }
+
+        button {
+            margin-top: 10px;
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            color: white;
+            border: none;
+            border-radius: 5px;
+        }
+
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+
+        button:hover {
+            background-color: #cccccc;
+        }
+
+        #violationsTable {
+            width: 100%;
+            border-collapse: collapse;
+            background-color: white;
+        }
+
+        #violationsTable th,
+        #violationsTable td {
+            padding: 10px;
+            border: 1px solid #ddd;
+            text-align: center;
+        }
+
+        #violationsTable th {
+            background-color: #D80000;
+            color: white;
+        }
+
+        #violationsTable tr:nth-child(even) {
+            background-color: #FFCCCC;
+        }
+
+        .right-column h2 {
+            color: #D80000;
+            margin-top: 0;
+            text-align: center;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #D80000;
+        }
+
+        .upload-form {
+            margin-bottom: 20px;
+            text-align: center;
+            padding: 20px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(216, 0, 0, 0.2);
+        }
+
+        .upload-form input[type="file"] {
+            margin: 10px 0;
+        }
+
+        .upload-form button {
+            background-color: #D80000;
+            margin-left: 10px;
+        }
+
+        .upload-form button:hover {
+            background-color: #FF3333;
+        }
+
+        #uploadStatus {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+            display: none;
+        }
+
+        #uploadStatus.success {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        #uploadStatus.error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Hệ thống giám sát giao thông</h1>
+    <div class="container">
+        <div class="left-column">
+            <div class="upload-form">
+                <form id="videoUploadForm" enctype="multipart/form-data">
+                    <label for="videoFile">Tải video:</label>
+                    <input type="file" id="videoFile" name="video" accept=".mp4,.avi,.mov,.mkv" />
+                    <button type="submit">Tải lên</button>
+                </form>
+                <div id="uploadStatus"></div>
+            </div>
+            <div id="videoContainer">
+                <img id="videoFrame" src="{{ url_for('get_first_frame') }}" alt="Khung hình video" />
+                <canvas id="lineCanvas"></canvas>
+            </div>
+            <div class="info">
+                <p id="instruction">Tải lên video để bắt đầu.</p>
+                <p id="lineInstruction" style="display: none;">Chọn hai điểm.
+                    <span id="pointCount">0/2 điểm đã chọn</span>
+                </p>
+                <button id="startButton" disabled>Bắt đầu xử lý</button>
+            </div>
+        </div>
+        <div class="right-column">
+            <h2>Vi phạm</h2>
+            <table id="violationsTable">
+                <thead>
+                    <tr>
+                        <th>ID Xe</th>
+                        <th>Thời gian</th>
+                        <th>Đường dẫn ảnh</th>
+                    </tr>
+                </thead>
+                <tbody id="violationsBody">
+                    <!-- Dữ liệu vi phạm sẽ được thêm bằng JavaScript -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // Lưu URL của video_feed từ Flask
+        const videoFeedUrl = "{{ url_for('video_feed') }}";
+        const violationsUrl = "{{ url_for('get_violations') }}";
+
+        const videoFrame = document.getElementById('videoFrame');
+        const canvas = document.getElementById('lineCanvas');
+        const ctx = canvas.getContext('2d');
+        const pointCountText = document.getElementById('pointCount');
+        const startButton = document.getElementById('startButton');
+        const instruction = document.getElementById('instruction');
+        const violationsBody = document.getElementById('violationsBody');
+        let points = [];
+
+        // Thiết lập kích thước canvas khớp với hình ảnh
+        videoFrame.onload = function () {
+            canvas.width = videoFrame.width;
+            canvas.height = videoFrame.height;
+            canvas.style.top = videoFrame.offsetTop + 'px';
+            canvas.style.left = videoFrame.offsetLeft + 'px';
+        };
+
+        // Xử lý sự kiện nhấn vào hình ảnh
+        videoFrame.addEventListener('click', (event) => {
+            if (points.length >= 2) return;
+
+            const rect = videoFrame.getBoundingClientRect();
+            const scaleX = videoFrame.naturalWidth / videoFrame.width;
+            const scaleY = videoFrame.naturalHeight / videoFrame.height;
+            const x = (event.clientX - rect.left) * scaleX;
+            const y = (event.clientY - rect.top) * scaleY;
+
+            points.push({ x, y });
+            pointCountText.textContent = `${points.length}/2 điểm đã chọn`;
+
+            // Vẽ các điểm và đường thẳng
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            points.forEach(point => {
+                const scaledX = point.x / scaleX;
+                const scaledY = point.y / scaleY;
+                ctx.beginPath();
+                ctx.arc(scaledX, scaledY, 5, 0, 2 * Math.PI);
+                ctx.fillStyle = 'red';
+                ctx.fill();
+            });
+
+            if (points.length === 2) {
+                const [p1, p2] = points;
+                ctx.beginPath();
+                ctx.moveTo(p1.x / scaleX, p1.y / scaleY);
+                ctx.lineTo(p2.x / scaleX, p2.y / scaleY);
+                ctx.strokeStyle = 'red';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                startButton.disabled = false;
+            }
+        });
+
+        // Cập nhật danh sách vi phạm
+        function fetchViolations() {
+            fetch(violationsUrl)
+                .then(response => response.json())
+                .then(data => {
+                    violationsBody.innerHTML = ''; // Xóa bảng hiện tại
+                    data.forEach(violation => {
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                            <td>${violation[0]}</td>
+                            <td>${violation[1]}</td>
+                            <td>${violation[2]}</td>
+                        `;
+                        violationsBody.appendChild(row);
+                    });
+                })
+                .catch(error => console.error('Lỗi khi lấy danh sách vi phạm:', error));
+        }
+
+        // Cập nhật danh sách vi phạm mỗi 2 giây
+        setInterval(fetchViolations, 2000);
+
+        // Xử lý sự kiện nhấn nút bắt đầu
+        startButton.addEventListener('click', () => {
+            fetch('/set_line_points', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    x1: points[0].x,
+                    y1: points[0].y,
+                    x2: points[1].x,
+                    y2: points[1].y
+                })
+            })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        // Thay hình ảnh tĩnh bằng luồng video
+                        videoFrame.src = videoFeedUrl;
+                        instruction.textContent = "Đang theo dõi giao thông để phát hiện vi phạm...";
+                        startButton.style.display = 'none';
+                        // Ẩn canvas sau khi bắt đầu luồng video
+                        canvas.style.display = 'none';
+                    }
+                })
+                .catch(error => console.error('Lỗi:', error));
+        });
+
+        // Lấy danh sách vi phạm ngay khi trang tải
+        fetchViolations();
+
+        // Xử lý form upload video
+        const videoUploadForm = document.getElementById('videoUploadForm');
+        const uploadStatus = document.getElementById('uploadStatus');
+        const lineInstruction = document.getElementById('lineInstruction');
+
+        videoUploadForm.addEventListener('submit', function (e) {
+            e.preventDefault();
+
+            const formData = new FormData();
+            const videoFile = document.getElementById('videoFile').files[0];
+
+            if (!videoFile) {
+                showUploadStatus('Vui lòng chọn video để tải lên', 'error');
+                return;
+            }
+
+            formData.append('video', videoFile);
+
+            fetch('/upload_video', {
+                method: 'POST',
+                body: formData
+            })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showUploadStatus('Video đã được tải lên thành công', 'success');
+                        // Cập nhật frame đầu tiên
+                        videoFrame.src = `${videoFrame.src}?t=${new Date().getTime()}`;
+                        instruction.style.display = 'none';
+                        lineInstruction.style.display = 'block';
+                        // Reset các điểm và canvas
+                        points = [];
+                        ctx.clearRect(0, 0, canvas.width, canvas.height);
+                        pointCountText.textContent = '0/2 điểm đã chọn';
+                        startButton.disabled = true;
+                    } else {
+                        showUploadStatus(data.error, 'error');
+                    }
+                })
+                .catch(error => {
+                    showUploadStatus('Lỗi khi tải lên video', 'error');
+                    console.error('Error:', error);
+                });
+        });
+
+        function showUploadStatus(message, type) {
+            uploadStatus.textContent = message;
+            uploadStatus.className = type;
+            uploadStatus.style.display = 'block';
+            setTimeout(() => {
+                uploadStatus.style.display = 'none';
+            }, 5000);
+        }
+    </script>
+</body>
+
+</html>
